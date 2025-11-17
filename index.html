@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     
     <style>
+        /* نفس الأنماط السابقة - بدون تغيير */
         :root {
             --primary-color: #4361ee;
             --secondary-color: #3f37c9;
@@ -537,13 +538,45 @@
 
         // ==================== منطق التحقق من الترخيص ====================
         
+        // *****************************************************************
+        // * هام: يجب تغيير هذا الرابط بالرابط الخام GIST الخاص بك          *
+        // *****************************************************************
+        const GIST_RAW_URL = 'https://gist.githubusercontent.com/akrm20/[Gist-ID]/raw/licenses.json'; // قم بتغييره
+
         /**
-         * التحقق من صحة كود الترخيص مع قاعدة البيانات
+         * جلب قائمة التراخيص من Gist
+         * (هذه العملية تتطلب إنترنت)
+         */
+        async function fetchLicensesFromGist() {
+            try {
+                console.log('جاري جلب قائمة التراخيص من Gist...');
+                const response = await fetch(GIST_RAW_URL);
+
+                if (!response.ok) {
+                    throw new Error(`فشل في جلب البيانات: ${response.statusText}`);
+                }
+                
+                const licenses = await response.json();
+                
+                // التأكد من أن البيانات مصفوفة (Array)
+                if (!Array.isArray(licenses)) {
+                    throw new Error('صيغة ملف Gist غير صحيحة، يجب أن يكون مصفوفة تراخيص.');
+                }
+
+                console.log('تم جلب قائمة التراخيص بنجاح.');
+                return licenses;
+
+            } catch (error) {
+                console.error('❌ خطأ في الاتصال بـ Gist:', error);
+                throw new Error('يتعذر الاتصال بخادم التراخيص. تأكد من اتصالك بالإنترنت.');
+            }
+        }
+
+        /**
+         * التحقق من صحة كود الترخيص
          */
         async function validateLicenseCode(code) {
             try {
-                console.log('جاري التحقق من الكود:', code);
-                
                 // التحقق من صيغة الكود
                 if (!code.startsWith('LIC-')) {
                     return {
@@ -552,27 +585,24 @@
                     };
                 }
 
-                // فتح قاعدة بيانات لوحة الإدارة (نفس قاعدة البيانات)
-                const licenseDB = await openLicenseDB();
-                const licenses = await getAllLicenses(licenseDB);
+                // 1. جلب التراخيص من مصدر Gist (يتطلب إنترنت)
+                const licenses = await fetchLicensesFromGist();
                 
-                console.log('التراخيص الموجودة في قاعدة البيانات:', licenses);
-                
-                // البحث عن الترخيص باستخدام الحقل 'key'
+                // 2. البحث عن الترخيص باستخدام الحقل 'key'
+                // ملاحظة: يفترض أن بيانات الترخيص في الـ Gist تحتوي على حقل 'key' مطابق لكود الترخيص
                 const license = licenses.find(l => l.key === code);
                 
-                console.log('الترخيص الذي تم العثور عليه:', license);
-
                 if (!license) {
                     return {
                         valid: false,
-                        message: 'كود الترخيص غير صحيح أو غير موجود'
+                        message: 'كود الترخيص غير صحيح أو غير موجود في قاعدة البيانات.'
                     };
                 }
 
-                // التحقق من تاريخ الانتهاء
+                // 3. التحقق من تاريخ الانتهاء
                 const expiryDate = new Date(license.expiryDate);
                 const today = new Date();
+                today.setHours(0, 0, 0, 0); // لضمان المقارنة الصحيحة باليوم
 
                 if (expiryDate < today) {
                     const daysExpired = Math.floor((today - expiryDate) / (1000 * 60 * 60 * 24));
@@ -583,7 +613,7 @@
                     };
                 }
 
-                // حساب الأيام المتبقية
+                // 4. حساب الأيام المتبقية
                 const daysLeft = Math.floor((expiryDate - today) / (1000 * 60 * 60 * 24));
 
                 return {
@@ -598,49 +628,12 @@
                 };
             } catch (error) {
                 console.error('خطأ في التحقق من الكود:', error);
+                // إرجاع رسالة الخطأ الناتجة عن fetchLicensesFromGist
                 return {
                     valid: false,
-                    message: 'حدث خطأ في التحقق من الكود'
+                    message: error.message || 'حدث خطأ غير متوقع في التحقق من الكود.'
                 };
             }
-        }
-
-        /**
-         * فتح قاعدة بيانات التراخيص (نفس قاعدة بيانات لوحة الإدارة)
-         */
-        function openLicenseDB() {
-            return new Promise((resolve, reject) => {
-                const request = indexedDB.open('AdminPanelDB', 2);
-
-                request.onerror = () => reject(request.error);
-                request.onsuccess = () => resolve(request.result);
-
-                request.onupgradeneeded = (event) => {
-                    const database = event.target.result;
-                    // إنشاء المخازن إذا لم تكن موجودة بنفس هيكل لوحة الإدارة
-                    const stores = ['licenses', 'clients', 'activity'];
-                    stores.forEach(storeName => {
-                        if (!database.objectStoreNames.contains(storeName)) {
-                            const store = database.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                            store.createIndex('timestamp', 'timestamp', { unique: false });
-                        }
-                    });
-                };
-            });
-        }
-
-        /**
-         * جلب جميع التراخيص
-         */
-        function getAllLicenses(db) {
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction(['licenses'], 'readonly');
-                const store = tx.objectStore('licenses');
-                const request = store.getAll();
-
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error);
-            });
         }
 
         // ==================== إدارة الجلسات ====================
